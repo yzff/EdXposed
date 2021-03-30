@@ -10,7 +10,6 @@ import android.content.res.XResources;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.Process;
-import android.text.TextUtils;
 import android.util.ArraySet;
 import android.util.Log;
 
@@ -18,11 +17,13 @@ import com.android.internal.os.ZygoteInit;
 import com.elderdrivers.riru.edxp.config.EdXpConfigGlobal;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.ref.WeakReference;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -33,8 +34,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
-import dalvik.system.DexFile;
 import dalvik.system.PathClassLoader;
+import de.robv.android.xposed.annotation.ApiSensitive;
+import de.robv.android.xposed.annotation.Level;
 import de.robv.android.xposed.callbacks.XC_InitPackageResources;
 import de.robv.android.xposed.callbacks.XC_InitZygote;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
@@ -66,6 +68,7 @@ public final class XposedInit {
     private static final String INSTANT_RUN_CLASS = "com.android.tools.fd.runtime.BootstrapApplication";
     public static volatile boolean disableResources = false;
     private static final String[] XRESOURCES_CONFLICTING_PACKAGES = {"com.sygic.aura"};
+    public static String prefsBasePath = null;
 
     private XposedInit() {
     }
@@ -92,6 +95,7 @@ public final class XposedInit {
         hookResources();
     }
 
+    @ApiSensitive(Level.MIDDLE)
     private static void hookResources() throws Throwable {
         if (!EdXpConfigGlobal.getConfig().isResourcesHookEnabled() || disableResources) {
             return;
@@ -125,17 +129,24 @@ public final class XposedInit {
         final Class<?> classGTLR;
         final Class<?> classResKey;
         final ThreadLocal<Object> latestResKey = new ThreadLocal<>();
+        final String createResourceMethod;
 
         if (Build.VERSION.SDK_INT <= 18) {
             classGTLR = ActivityThread.class;
             classResKey = Class.forName("android.app.ActivityThread$ResourcesKey");
+            createResourceMethod = "getOrCreateResources";
+        } else if (Build.VERSION.SDK_INT < 30){
+            classGTLR = Class.forName("android.app.ResourcesManager");
+            classResKey = Class.forName("android.content.res.ResourcesKey");
+            createResourceMethod = "getOrCreateResources";
         } else {
             classGTLR = Class.forName("android.app.ResourcesManager");
             classResKey = Class.forName("android.content.res.ResourcesKey");
+            createResourceMethod = "createResources";
         }
 
         if (Build.VERSION.SDK_INT >= 24) {
-            hookAllMethods(classGTLR, "getOrCreateResources", new XC_MethodHook() {
+            hookAllMethods(classGTLR, createResourceMethod, new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     // At least on OnePlus 5, the method has an additional parameter compared to AOSP.
@@ -266,6 +277,7 @@ public final class XposedInit {
         XResources.init(latestResKey);
     }
 
+    @ApiSensitive(Level.MIDDLE)
     private static XResources cloneToXResources(XC_MethodHook.MethodHookParam param, String resDir) {
         Object result = param.getResult();
         if (result == null || result instanceof XResources ||
@@ -304,38 +316,27 @@ public final class XposedInit {
     private static final Object moduleLoadLock = new Object();
     // @GuardedBy("moduleLoadLock")
     private static final ArraySet<String> loadedModules = new ArraySet<>();
-    // @GuardedBy("moduleLoadLock")
-    private static long lastModuleListModifiedTime = -1;
 
-    public static boolean loadModules(boolean isInZygote, boolean callInitZygote) throws IOException {
+    public static ArraySet<String> getLoadedModules() {
+        synchronized (moduleLoadLock) {
+            return loadedModules;
+        }
+    }
+
+    public static boolean loadModules(boolean callInitZygote) throws IOException {
         boolean hasLoaded = !modulesLoaded.compareAndSet(false, true);
-        if (hasLoaded && !EdXpConfigGlobal.getConfig().isDynamicModulesMode()) {
+        if (hasLoaded) {
             return false;
         }
         synchronized (moduleLoadLock) {
-            final String filename = EdXpConfigGlobal.getConfig().getInstallerBaseDir() + "conf/modules.list";
-            BaseService service = SELinuxHelper.getAppDataFileService();
-            if (!service.checkFileExists(filename)) {
-                Log.e(TAG, "Cannot load any modules because " + filename + " was not found");
-                // FIXME module list is cleared but never could be reload again
-                // when using dynamic-module-list under multi-user environment
-                clearAllCallbacks();
-                return false;
-            }
-
-            long moduleListModifiedTime = service.getFileModificationTime(filename);
-            if (lastModuleListModifiedTime == moduleListModifiedTime) {
-                // module list has not changed
-                return false;
-            }
-
             ClassLoader topClassLoader = XposedBridge.BOOTCLASSLOADER;
             ClassLoader parent;
             while ((parent = topClassLoader.getParent()) != null) {
                 topClassLoader = parent;
             }
 
-            InputStream stream = service.getFileInputStream(filename);
+            String moduleList = EdXpConfigGlobal.getConfig().getModulesList();
+            InputStream stream = new ByteArrayInputStream(moduleList.getBytes());
             BufferedReader apks = new BufferedReader(new InputStreamReader(stream));
             ArraySet<String> newLoadedApk = new ArraySet<>();
             String apk;
@@ -343,6 +344,7 @@ public final class XposedInit {
                 if (loadedModules.contains(apk)) {
                     newLoadedApk.add(apk);
                 } else {
+                    loadedModules.add(apk); // temporarily add it for XSharedPreference
                     boolean loadSuccess = loadModule(apk, topClassLoader, callInitZygote);
                     if (loadSuccess) {
                         newLoadedApk.add(apk);
@@ -355,9 +357,6 @@ public final class XposedInit {
 
             // refresh callback according to current loaded module list
             pruneCallbacks(loadedModules);
-
-            lastModuleListModifiedTime = moduleListModifiedTime;
-
         }
         return true;
     }
@@ -399,43 +398,40 @@ public final class XposedInit {
     private static boolean loadModule(String apk, ClassLoader topClassLoader, boolean callInitZygote) {
         Log.i(TAG, "Loading modules from " + apk);
 
-        // todo remove this legacy logic
-        String blackListModulePackageName = EdXpConfigGlobal.getConfig().getBlackListModulePackageName();
-        if (!TextUtils.isEmpty(apk) && !TextUtils.isEmpty(blackListModulePackageName)
-                && apk.contains(blackListModulePackageName)) {
-            Log.i(TAG, "We are going to take over black list's job...");
-            return false;
-        }
-
         if (!new File(apk).exists()) {
             Log.e(TAG, "  File does not exist");
             return false;
         }
 
-        DexFile dexFile;
+        ClassLoader mcl = new PathClassLoader(apk, topClassLoader);
         try {
-            dexFile = new DexFile(apk);
-        } catch (IOException e) {
-            Log.e(TAG, "  Cannot load module", e);
-            return false;
+            if (mcl.loadClass(INSTANT_RUN_CLASS) != null) {
+                Log.e(TAG, "  Cannot load module, please disable \"Instant Run\" in Android Studio.");
+                return false;
+            }
+        } catch (ClassNotFoundException ignored) {
         }
 
-        if (dexFile.loadClass(INSTANT_RUN_CLASS, topClassLoader) != null) {
-            Log.e(TAG, "  Cannot load module, please disable \"Instant Run\" in Android Studio.");
-            closeSilently(dexFile);
-            return false;
+        try {
+            if (mcl.loadClass(XposedBridge.class.getName()) != null) {
+                Log.e(TAG, "  Cannot load module:");
+                Log.e(TAG, "  The Xposed API classes are compiled into the module's APK.");
+                Log.e(TAG, "  This may cause strange issues and must be fixed by the module developer.");
+                Log.e(TAG, "  For details, see: http://api.xposed.info/using.html");
+                return false;
+            }
+        } catch (ClassNotFoundException ignored) {
         }
 
-        if (dexFile.loadClass(XposedBridge.class.getName(), topClassLoader) != null) {
+        try {
+            Field parentField = ClassLoader.class.getDeclaredField("parent");
+            parentField.setAccessible(true);
+            parentField.set(mcl, XposedInit.class.getClassLoader());
+        } catch (NoSuchFieldException | IllegalAccessException e) {
             Log.e(TAG, "  Cannot load module:");
-            Log.e(TAG, "  The Xposed API classes are compiled into the module's APK.");
-            Log.e(TAG, "  This may cause strange issues and must be fixed by the module developer.");
-            Log.e(TAG, "  For details, see: http://api.xposed.info/using.html");
-            closeSilently(dexFile);
+            Log.e(TAG, "  Classloader cannot change parent.");
             return false;
         }
-
-        closeSilently(dexFile);
 
         ZipFile zipFile = null;
         InputStream is;
@@ -454,7 +450,6 @@ public final class XposedInit {
             return false;
         }
 
-        ClassLoader mcl = new PathClassLoader(apk, XposedInit.class.getClassLoader());
         BufferedReader moduleClassesReader = new BufferedReader(new InputStreamReader(is));
         try {
             String moduleClassName;

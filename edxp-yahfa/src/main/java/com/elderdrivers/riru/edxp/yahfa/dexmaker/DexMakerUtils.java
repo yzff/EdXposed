@@ -1,11 +1,10 @@
 package com.elderdrivers.riru.edxp.yahfa.dexmaker;
 
-import android.app.AndroidAppHelper;
-import android.os.Build;
-import android.text.TextUtils;
-
 import com.elderdrivers.riru.edxp.config.ConfigManager;
+import com.elderdrivers.riru.edxp.util.Utils;
 
+import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HashMap;
 import java.util.Map;
@@ -14,21 +13,17 @@ import external.com.android.dx.Code;
 import external.com.android.dx.Local;
 import external.com.android.dx.TypeId;
 
+@SuppressWarnings({"rawtypes", "unchecked"})
 public class DexMakerUtils {
 
-    private static final boolean IN_MEMORY_DEX_ELIGIBLE = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O;
+    public static boolean canCache = true;
 
-    public static boolean shouldUseInMemoryHook() {
-        if (!IN_MEMORY_DEX_ELIGIBLE) {
-            return false;
+    static {
+        File cacheDir = new File(ConfigManager.getCachePath(""));
+        if(!cacheDir.canRead() || !cacheDir.canWrite()) {
+            Utils.logW("Cache disabled");
+            canCache = false;
         }
-        String packageName = AndroidAppHelper.currentPackageName();
-        if (TextUtils.isEmpty(packageName)) { //default to true
-            DexLog.w("packageName is empty, processName=" + ConfigManager.appProcessName
-                    + ", appDataDir=" + ConfigManager.appDataDir);
-            return true;
-        }
-        return !ConfigManager.shouldUseCompatMode(packageName);
     }
 
     public static void autoBoxIfNecessary(Code code, Local<Object> target, Local source) {
@@ -221,17 +216,11 @@ public class DexMakerUtils {
         }
     }
 
-    public static void returnRightValue(Code code, Class<?> returnType, Map<Class, Local> resultLocals) {
-        String unboxMethod;
-        TypeId<?> boxTypeId;
-        code.returnValue(resultLocals.get(returnType));
-    }
-
     public static String getSha1Hex(String text) {
         final MessageDigest digest;
         try {
             digest = MessageDigest.getInstance("SHA-1");
-            byte[] result = digest.digest(text.getBytes("UTF-8"));
+            byte[] result = digest.digest(text.getBytes(StandardCharsets.UTF_8));
             StringBuilder sb = new StringBuilder();
             for (byte b : result) {
                 sb.append(String.format("%02x", b));

@@ -4,15 +4,15 @@ sourceCompatibility = "7"
 targetCompatibility = "7"
 
 android {
-    compileSdkVersion 28
+    compileSdkVersion androidCompileSdkVersion.toInteger()
 
     defaultConfig {
         applicationId "com.elderdrivers.riru.edxp.sandhook"
-        minSdkVersion 26
-        targetSdkVersion 28
+        minSdkVersion androidMinSdkVersion.toInteger()
+        targetSdkVersion androidTargetSdkVersion.toInteger()
         versionCode 1
         versionName "1.0"
-        multiDexEnabled true
+        multiDexEnabled false
     }
 
     buildTypes {
@@ -22,14 +22,14 @@ android {
         }
     }
 
+    ndkVersion androidCompileNdkVersion
 }
 
 dependencies {
-    compileOnly files("${hiddenApiStubJarFilePath}")
+    compileOnly project(':hiddenapi-stubs')
     implementation project(':edxp-common')
-    implementation project(':xposed-bridge')
-    implementation 'com.swift.sandhook:hooklib:4.1.6'
-    compileOnly project(':dexmaker')
+    implementation project(':sandhook-hooklib')
+    compileOnly files(project(":dexmaker").tasks.getByName("makeJarRelease").outputs)
 }
 
 
@@ -57,22 +57,25 @@ afterEvaluate {
 
         def variantNameCapped = variant.name.capitalize()
         def variantNameLowered = variant.name.toLowerCase()
-
         def myTemplatePath = "${projectDir}/template_override/"
 
-        task("makeAndCopy${variantNameCapped}", type: Jar, dependsOn: "assemble${variantNameCapped}") {
+        task("copyDex${variantNameCapped}", type: Copy) {
+            dependsOn "assemble${variantNameCapped}"
             dependsOn tasks.getByPath(":edxp-common:copyCommonProperties")
-            from "${buildDir}/intermediates/transforms/dexMerger/${variantNameLowered}/0/",
-                    "${projectDir}/src/main/resources/"
-            destinationDir file(myTemplatePath + "system/framework/")
-            baseName "edxp"
+            dependsOn tasks.getByPath(":sandhook-hooklib:copySandHook${variantNameCapped}LibraryToMagiskTemplate")
+            def dexOutPath = variant.name.contains("release") ?
+                    "${buildDir}/intermediates/dex/${variantNameLowered}/minify${variantNameCapped}WithR8" :
+                    "${buildDir}/intermediates/dex/${variantNameLowered}/mergeDex${variantNameCapped}"
+            from(dexOutPath) {
+                rename "classes.dex", "sandhook.dex"
+            }
+            destinationDir file(zipPathMagiskReleasePath + "system/framework/")
             doLast {
                 copy {
                     from file(myTemplatePath)
-                    into file(templateRootPath)
+                    into file(zipPathMagiskReleasePath)
                 }
             }
-            outputs.upToDateWhen { false }
         }
     }
 }

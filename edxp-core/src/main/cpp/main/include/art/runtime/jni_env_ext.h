@@ -9,20 +9,21 @@ namespace art {
     class JNIEnvExt : edxp::HookedObject {
 
     private:
-        CREATE_FUNC_SYMBOL_ENTRY(jobject, NewLocalRef, void *env, void *mirror_ptr) {
-            return NewLocalRefSym(env, mirror_ptr);
+        CREATE_MEM_FUNC_SYMBOL_ENTRY(jobject, NewLocalRef, void *thiz, void *mirror_ptr) {
+            return NewLocalRefSym(thiz, mirror_ptr);
         }
 
-        CREATE_FUNC_SYMBOL_ENTRY(void, DeleteLocalRef, void *env, jobject obj) {
-            DeleteLocalRefSym(env, obj);
+        CREATE_MEM_FUNC_SYMBOL_ENTRY(void, DeleteLocalRef, void *thiz, jobject obj) {
+            return DeleteLocalRefSym(thiz, obj);
         }
 
     public:
         JNIEnvExt(void *thiz) : HookedObject(thiz) {}
 
+        // @ApiSensitive(Level.MIDDLE)
         static void Setup(void *handle, HookFunType hook_func) {
-            RETRIEVE_FUNC_SYMBOL(NewLocalRef, "_ZN3art9JNIEnvExt11NewLocalRefEPNS_6mirror6ObjectE");
-            RETRIEVE_FUNC_SYMBOL(DeleteLocalRef, "_ZN3art9JNIEnvExt14DeleteLocalRefEP8_jobject");
+            RETRIEVE_MEM_FUNC_SYMBOL(NewLocalRef, "_ZN3art9JNIEnvExt11NewLocalRefEPNS_6mirror6ObjectE");
+            RETRIEVE_MEM_FUNC_SYMBOL(DeleteLocalRef, "_ZN3art9JNIEnvExt14DeleteLocalRefEP8_jobject");
         }
 
         jobject NewLocalRefer(void *mirror_ptr) {

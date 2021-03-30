@@ -12,7 +12,6 @@
 #include <sys/syscall.h>
 
 #include "common.h"
-#include "env.h"
 #include "trampoline.h"
 
 static unsigned char *trampolineCode; // place where trampolines are saved
@@ -70,6 +69,10 @@ unsigned char trampoline[] = {
 #endif
 static unsigned int trampolineSize = roundUpToPtrSize(sizeof(trampoline));
 
+static inline void FlushCache(void *addr, size_t size) {
+    __builtin___clear_cache((char *) addr, (char *) ((uintptr_t) addr + size));
+}
+
 void *genTrampoline(void *hookMethod) {
     void *targetAddr;
 
@@ -89,7 +92,11 @@ void *genTrampoline(void *hookMethod) {
 
 #elif defined(__aarch64__)
     memcpy(targetAddr + 12, &hookMethod, pointer_size);
+
+#else
+#error Unsupported architecture
 #endif
+    FlushCache(targetAddr, sizeof(trampoline));
 
     return targetAddr;
 }
@@ -106,6 +113,8 @@ void setupTrampoline() {
             ((unsigned char) OFFSET_entry_point_from_quick_compiled_code_in_ArtMethod) << 4;
     trampoline[6] |=
             ((unsigned char) OFFSET_entry_point_from_quick_compiled_code_in_ArtMethod) >> 4;
+#else
+#error Unsupported architecture
 #endif
 }
 
@@ -119,7 +128,7 @@ int doInitHookCap(unsigned int cap) {
     }
     unsigned int allSize = trampolineSize * cap;
     unsigned char *buf = mmap(NULL, allSize, PROT_READ | PROT_WRITE | PROT_EXEC,
-                              MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
+                              MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     if (buf == MAP_FAILED) {
         LOGE("mmap failed, errno = %s", strerror(errno));
         return 1;

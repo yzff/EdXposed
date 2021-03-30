@@ -4,6 +4,7 @@ import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.util.Log;
 
+import com.elderdrivers.riru.edxp.bridge.BuildConfig;
 import com.elderdrivers.riru.edxp.config.EdXpConfigGlobal;
 
 import java.lang.reflect.AccessibleObject;
@@ -21,6 +22,8 @@ import java.util.Set;
 
 import dalvik.system.InMemoryDexClassLoader;
 import de.robv.android.xposed.XC_MethodHook.MethodHookParam;
+import de.robv.android.xposed.annotation.ApiSensitive;
+import de.robv.android.xposed.annotation.Level;
 import de.robv.android.xposed.callbacks.XC_InitPackageResources;
 import de.robv.android.xposed.callbacks.XC_InitZygote;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
@@ -92,6 +95,7 @@ public final class XposedBridge {
 
 	public static volatile ClassLoader dummyClassLoader = null;
 
+	@ApiSensitive(Level.MIDDLE)
 	public static void initXResources() {
         if (dummyClassLoader != null) {
         	return;
@@ -142,8 +146,7 @@ public final class XposedBridge {
 	 * Returns the currently installed version of the Xposed framework.
 	 */
 	public static int getXposedVersion() {
-		// ed: fixed value for now
-		return 90;
+		return BuildConfig.API_CODE;
 	}
 
 	/**
@@ -237,7 +240,7 @@ public final class XposedBridge {
             if (reflectMethod != null) {
 				hookMethodNative(reflectMethod, declaringClass, slot, additionalInfo);
 			} else {
-				PendingHooks.recordPendingMethod(hookMethod, additionalInfo);
+				PendingHooks.recordPendingMethod((Method)hookMethod, additionalInfo);
 			}
         }
 

@@ -14,7 +14,7 @@ namespace art {
 
         private:
 
-            CREATE_FUNC_SYMBOL_ENTRY(const char *, GetDescriptor, void *thiz,
+            CREATE_MEM_FUNC_SYMBOL_ENTRY(const char *, GetDescriptor, void *thiz,
                                      std::string *storage) {
                 if (GetDescriptorSym)
                     return GetDescriptorSym(thiz, storage);
@@ -22,8 +22,10 @@ namespace art {
                     return "";
             }
 
-            CREATE_HOOK_STUB_ENTRIES(bool, IsInSamePackage, void *thiz, void *that) {
-                std::string storage1, storage2;
+            CREATE_MEM_HOOK_STUB_ENTRIES("_ZN3art6mirror5Class15IsInSamePackageENS_6ObjPtrIS1_EE",
+                    bool, IsInSamePackage, (void *thiz, void* that), {
+                std::string storage1;
+                std::string storage2;
                 const char *thisDesc = GetDescriptor(thiz, &storage1);
                 const char *thatDesc = GetDescriptor(that, &storage2);
                 // Note: these identifiers should be consistent with those in Java layer
@@ -40,25 +42,26 @@ namespace art {
                     || strstr(thatDesc, "android/content/res/XResources$XTypedArray") != nullptr) {
                     return true;
                 }
-                return IsInSamePackageBackup(thiz, that);
+                return backup(thiz, that);
+            });
+
+            CREATE_MEM_FUNC_SYMBOL_ENTRY(void*, GetClassDef, void* thiz) {
+                if (LIKELY(GetClassDefSym))
+                    return GetClassDefSym(thiz);
+                return nullptr;
             }
 
         public:
             Class(void *thiz) : HookedObject(thiz) {}
 
+            // @ApiSensitive(Level.MIDDLE)
             static void Setup(void *handle, HookFunType hook_func) {
-                RETRIEVE_FUNC_SYMBOL(GetDescriptor, "_ZN3art6mirror5Class13GetDescriptorEPNSt3__112"
+                RETRIEVE_MEM_FUNC_SYMBOL(GetDescriptor, "_ZN3art6mirror5Class13GetDescriptorEPNSt3__112"
                                                     "basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEE");
 
-//                RETRIEVE_FIELD_SYMBOL(mutator_lock_, "_ZN3art5Locks13mutator_lock_E");
-//                LOGE("mutator_lock_: %p", mutator_lock_);
+                RETRIEVE_MEM_FUNC_SYMBOL(GetClassDef, "_ZN3art6mirror5Class11GetClassDefEv");
 
-                HOOK_FUNC(IsInSamePackage,
-                          "_ZN3art6mirror5Class15IsInSamePackageENS_6ObjPtrIS1_EE", //8.0-
-                          "_ZN3art6mirror5Class15IsInSamePackageEPS1_"); //5.0-7.1
-
-//                HOOK_FUNC(ClassForName,
-//                          "_ZN3artL18Class_classForNameEP7_JNIEnvP7_jclassP8_jstringhP8_jobject");
+                edxp::HookSyms(handle, hook_func, IsInSamePackage);
             }
 
             const char *GetDescriptor(std::string *storage) {
@@ -66,6 +69,17 @@ namespace art {
                     return GetDescriptor(thiz_, storage);
                 }
                 return "";
+            }
+
+            std::string GetDescriptor() {
+                std::string storage;
+                return GetDescriptor(&storage);
+            }
+
+            void *GetClassDef() {
+                if(thiz_ && GetClassDefSym)
+                    return GetClassDef(thiz_);
+                return nullptr;
             }
         };
 
